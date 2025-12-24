@@ -1,9 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 use std::io::{stderr, stdout, IsTerminal, Write};
+use std::sync::Mutex;
 
 use llrt_logging::{build_formatted_string, FormatOptions, NEWLINE};
 use llrt_utils::module::{export_default, ModuleInfo};
+use once_cell::sync::OnceCell;
 use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
     prelude::{Func, Rest},
@@ -107,6 +109,13 @@ where
     result.push(NEWLINE);
 
     //we don't care if output is interrupted
+    if let Some(mutex) = GLOBAL_CONSOLE_INIT.get() {
+        if let Ok(mut guard) = mutex.lock() {
+            if let Some(callback) = guard.take() {
+                callback(result.clone());
+            }
+        }
+    }
     let _ = output.write_all(result.as_bytes());
 
     Ok(())
@@ -140,7 +149,13 @@ impl From<ConsoleModule> for ModuleInfo<ConsoleModule> {
     }
 }
 
-pub fn init(ctx: &Ctx<'_>) -> Result<()> {
+type ConsoleInitCallback = Option<Box<dyn FnOnce(String) + Send + Sync>>;
+
+static GLOBAL_CONSOLE_INIT: OnceCell<Mutex<ConsoleInitCallback>> = OnceCell::new();
+
+pub fn init(ctx: &Ctx<'_>, result_callback: ConsoleInitCallback) -> Result<()> {
+    GLOBAL_CONSOLE_INIT.get_or_init(|| Mutex::new(result_callback));
+
     let globals = ctx.globals();
 
     let console = Object::new(ctx.clone())?;
