@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use llrt_logging::{build_formatted_string, FormatOptions, NEWLINE};
 use llrt_utils::module::{export_default, ModuleInfo};
-use once_cell::sync::OnceCell;
+use once_cell::sync::Lazy;
 use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
     prelude::{Func, Rest},
@@ -108,14 +108,14 @@ where
 
     result.push(NEWLINE);
 
-    //we don't care if output is interrupted
-    if let Some(mutex) = GLOBAL_CONSOLE_INIT.get() {
-        if let Ok(mut guard) = mutex.lock() {
-            if let Some(callback) = guard.take() {
-                callback(result.clone());
-            }
+    // Call the callback if it's set
+    if let Ok(mut guard) = GLOBAL_CONSOLE_CALLBACK.lock() {
+        if let Some(ref mut callback) = *guard {
+            callback(result.clone());
         }
     }
+
+    //we don't care if output is interrupted
     let _ = output.write_all(result.as_bytes());
 
     Ok(())
@@ -149,13 +149,19 @@ impl From<ConsoleModule> for ModuleInfo<ConsoleModule> {
     }
 }
 
-type ConsoleInitCallback = Option<Box<dyn FnOnce(String) + Send + Sync>>;
+type ConsoleCallback = Option<Box<dyn FnMut(String) + Send + Sync>>;
 
-static GLOBAL_CONSOLE_INIT: OnceCell<Mutex<ConsoleInitCallback>> = OnceCell::new();
+static GLOBAL_CONSOLE_CALLBACK: Lazy<Mutex<ConsoleCallback>> = Lazy::new(|| Mutex::new(None));
 
-pub fn init(ctx: &Ctx<'_>, result_callback: ConsoleInitCallback) -> Result<()> {
-    GLOBAL_CONSOLE_INIT.get_or_init(|| Mutex::new(result_callback));
+/// Set a callback that will be called with the formatted log output string
+/// whenever console logging occurs. The callback can be called multiple times.
+pub fn set_callback(callback: ConsoleCallback) {
+    if let Ok(mut guard) = GLOBAL_CONSOLE_CALLBACK.lock() {
+        *guard = callback;
+    }
+}
 
+pub fn init(ctx: &Ctx<'_>) -> Result<()> {
     let globals = ctx.globals();
 
     let console = Object::new(ctx.clone())?;
